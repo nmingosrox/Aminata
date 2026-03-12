@@ -1,55 +1,26 @@
-﻿"""
-Performance dashboard utilities.
-"""
-from typing import List, Dict
-import numpy as np
+﻿from __future__ import annotations
+
+import pandas as pd
 
 
 class Dashboard:
     """
-    Dashboard calculates and displays key performance indicators (KPIs).
+    Summarizes performance and exposure.
     """
 
-    def __init__(self):
-        """
-        Initializes the Dashboard module.
-        """
-        pass
+    def summarize(self, trades_df: pd.DataFrame) -> str:
+        if trades_df is None or trades_df.empty:
+            return "Dashboard: No trades to report."
+        required = {"pnl", "symbol", "side", "size"}
+        if not required.issubset(set(trades_df.columns)):
+            missing = required - set(trades_df.columns)
+            raise ValueError(f"trades_df missing columns: {sorted(missing)}")
 
-    def update(self, trades: List[Dict]) -> None:
-        """
-        Update the dashboard with the latest trade data and performance metrics.
+        total_pnl = float(trades_df["pnl"].sum())
+        win_rate = float((trades_df["pnl"] > 0).mean())
+        exposure = trades_df.groupby("symbol")["size"].sum().to_dict()
 
-        Args:
-            trades (list): A list of completed trade dictionaries with pnl or entry/exit.
-
-        Returns:
-            None
-        """
-        if not trades:
-            print("Dashboard: No trades to report yet.")
-            return
-
-        pnls = []
-        for t in trades:
-            if "pnl" in t:
-                pnls.append(float(t["pnl"]))
-            elif "entry" in t and "exit" in t and "size" in t:
-                pnls.append((float(t["exit"]) - float(t["entry"])) * float(t["size"]))
-
-        if not pnls:
-            print("Dashboard: No valid trade PnL data.")
-            return
-
-        total_pnl = float(np.sum(pnls))
-        returns = np.array(pnls)
-        sharpe = 0.0
-        if np.std(returns) > 0:
-            sharpe = float(np.mean(returns) / np.std(returns) * np.sqrt(len(returns)))
-
-        equity = np.cumsum(returns)
-        peak = np.maximum.accumulate(equity)
-        drawdowns = (peak - equity)
-        max_drawdown = float(np.max(drawdowns)) if len(drawdowns) else 0.0
-
-        print(f"Dashboard: Total PnL={total_pnl:.2f}, Sharpe={sharpe:.2f}, Max Drawdown={max_drawdown:.2f}")
+        return (
+            f"Dashboard: Total PnL={total_pnl:.2f}, "
+            f"Win Rate={win_rate:.2%}, Exposure={exposure}"
+        )

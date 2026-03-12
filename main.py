@@ -1,69 +1,107 @@
-from data import macroD, candleD, tickD
-from analysis.signalG import SignalGenerator
-from analysis.logger import TradeLogger
+﻿from __future__ import annotations
+
+import argparse
+import logging
+import traceback
+
 from analysis.dashboard import Dashboard
-from capitalM.riskM import RiskManager
-from capitalM.portfolioM import PortfolioManager
+from analysis.logger import TradeLogger
+from analysis.signalG import SignalGenerator
 from capitalM.executionM import ExecutionManager
+from capitalM.portfolioM import PortfolioManager
+from capitalM.riskM import RiskManager
+from data.candleD import CandleDataFetcher
+from data.macroD import MacroDataFetcher
+from data.tickD import TickDataFetcher
 
-import time
 
-def main():
-    """
-    Main function to run the algorithmic trading bot.
-    Initializes all modules and runs the main trading loop.
-    """
-    # Initialize modules
-    sg = SignalGenerator(macro_source=macroD, candle_source=candleD, tick_source=tickD)
-    rm = RiskManager()
-    pm = PortfolioManager(capital=100000)
-    exec_mgr = ExecutionManager()
-    log = TradeLogger()
-    dash = Dashboard()
+def _setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
 
-    # Connect execution manager (MT5 placeholder)
-    exec_mgr.connect()
 
-    # Example loop (replace with scheduler or event-driven later)
-    for cycle in range(3):  # run 3 cycles for testing
-        print(f"\n--- Cycle {cycle+1} ---")
+def _run_stage(name: str, func, *args, **kwargs):
+    try:
+        logging.info("Stage start: %s", name)
+        result = func(*args, **kwargs)
+        logging.info("Stage complete: %s", name)
+        return result
+    except Exception as exc:
+        logging.error("Stage failed: %s", name)
+        logging.error("%s", traceback.format_exc())
+        raise RuntimeError(f"Stage '{name}' failed: {exc}") from exc
 
-        # 1. Generate signals
-        signals = sg.generate(symbols=["EURUSD", "GBPUSD"])
-        print("Signals:", signals)
 
-        # 2. Portfolio allocation
-        allocations = pm.allocate(signals, weights={'macro':0.4,'calendar':0.3,'technical':0.3})
-        print("Allocations:", allocations)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Trading pipeline")
+    parser.add_argument("--mode", choices=["dev", "prod"], default="dev")
+    parser.add_argument("--symbols", nargs="+", default=["EURUSD", "GBPUSD"])
+    parser.add_argument("--count", type=int, default=200)
+    parser.add_argument("--candle-csv", default=None)
+    parser.add_argument("--tick-csv", default=None)
+    return parser.parse_args()
 
-        # 3. Risk-adjusted sizing
-        sized_positions = {}
-        for sym, conviction in allocations.items():
-            price_series = sg.get_price_series(sym)
-            # Risk manager determines lot size based on conviction, capital, and volatility
-            sized_positions[sym] = rm.position_size(
-                symbol=sym,
-                conviction=conviction,
-                capital=pm.capital,
-                price_series=price_series
-            )
-        print("Sized Positions:", sized_positions)
 
-        # 4. Execution
-        executed_trades = exec_mgr.rebalance(sized_positions)
+def main() -> None:
+    _setup_logging()
+    args = parse_args()
 
-        # 5. Logging
-        for trade in executed_trades:
-            entry_price = trade.get("price", 0.0)
-            log.log_trade(trade.get("symbol", ""), entry_price, entry_price, 0.0, trade.get("timestamp"))
+    macro_fetcher = MacroDataFetcher()
+    candle_fetcher = CandleDataFetcher()
+    tick_fetcher = TickDataFetcher()
+    signal_gen = SignalGenerator()
+    portfolio = PortfolioManager()
+    risk = RiskManager()
+    execution = ExecutionManager(mode=args.mode)
+    logger = TradeLogger()
+    dashboard = Dashboard()
 
-        # 6. Dashboard update
-        dash.update(exec_mgr.closed_trades)
+    all_trades = []
 
-        time.sleep(1)  # simulate wait between cycles
+    for symbol in args.symbols:
+        macro_df = _run_stage(
+            "load_macro",
+            macro_fetcher.fetch_macro_data,
+            args.symbols,
+            args.mode,
+        )
+        candle_df = _run_stage(
+            "load_candles",
+            candle_fetcher.fetch_ohlc,
+            symbol,
+            args.count,
+            args.mode,
+            args.candle_csv,
+        )
+        ticks = _run_stage(
+            "load_ticks",
+            tick_fetcher.fetch_ticks,
+            symbol,
+            100,
+            args.mode,
+            args.tick_csv,
+        )
 
-    # Shutdown execution manager
-    exec_mgr.shutdown()
+        signals = _run_stage(
+            "generate_signals",
+            signal_gen.generate,
+            macro_df,
+            candle_df,
+            ticks,
+            symbol,
+        )
+        allocations = _run_stage("blend_allocations", portfolio.allocate, signals)
+        risk_adjusted = _run_stage("risk_adjust", risk.apply, allocations, candle_df)
+        orders = _run_stage("create_orders", execution.create_orders, risk_adjusted)
+        trades = _run_stage("execute_orders", execution.execute, orders)
+        all_trades.extend(trades)
+
+    trades_df = _run_stage("log_trades", logger.record, all_trades)
+    summary = _run_stage("dashboard", dashboard.summarize, trades_df)
+    logging.info(summary)
+
 
 if __name__ == "__main__":
     main()

@@ -1,33 +1,31 @@
+﻿from __future__ import annotations
+
+from datetime import datetime
+from typing import Dict, List
+
+from dataclasses import Allocation
+
+
 class PortfolioManager:
     """
-    PortfolioManager is responsible for capital allocation. It blends signals
-    from the SignalGenerator into a final conviction score and determines the
-    target allocation for each asset in the portfolio.
+    Blends signals into raw allocations.
     """
-    def __init__(self, capital=100000):
-        """
-        Initializes the PortfolioManager.
-        Args:
-            capital (float): The total trading capital available.
-        """
-        self.capital = capital
 
-    def allocate(self, signals, weights=None):
-        """
-        Blend signals into target allocations using a weighted formula.
-        The output is a conviction score for each symbol.
+    def __init__(self, weights: Dict[str, float] | None = None):
+        self.weights = weights or {"signal": 1.0}
 
-        Args:
-            signals (dict): A dictionary of signals per symbol.
-            weights (dict): Weights for each signal type (macro, calendar, technical).
+    def allocate(self, signals: Dict[str, float]) -> Dict[str, float]:
+        if not isinstance(signals, dict) or not signals:
+            raise ValueError("signals must be a non-empty dict")
 
-        Returns:
-            dict: A dictionary mapping symbols to their final blended conviction score.
-        """
-        allocations = {}
-        for sym, signal_values in signals.items():
-            score = (weights.get('macro', 0) * signal_values.get('macro', 0) +
-                     weights.get('calendar', 0) * signal_values.get('calendar', 0) +
-                     weights.get('technical', 0) * signal_values.get('technical', 0))
-            allocations[sym] = score
+        allocations: Dict[str, float] = {}
+        weight = float(self.weights.get("signal", 1.0))
+        for sym, val in signals.items():
+            allocations[sym] = float(val) * weight
         return allocations
+
+    def as_dataclass(self, allocations: Dict[str, float]) -> List[Allocation]:
+        if not isinstance(allocations, dict):
+            raise ValueError("allocations must be a dict")
+        now = datetime.utcnow()
+        return [Allocation(instrument=k, weight=float(v), timestamp=now) for k, v in allocations.items()]

@@ -1,49 +1,48 @@
-﻿"""
-Trade logging utilities.
-"""
-from datetime import datetime
-from typing import Optional
+﻿from __future__ import annotations
+
+from typing import Dict, List
+
+import pandas as pd
+
+from dataclasses import TradeLog
 
 
 class TradeLogger:
     """
-    TradeLogger records all trading activities and performance results to a log file.
+    Records trades and exposes them as a DataFrame.
     """
 
-    def __init__(self, filename: str = "trades.log"):
-        """
-        Initializes the logger.
+    def __init__(self):
+        self._trades: List[TradeLog] = []
 
-        Args:
-            filename (str): The name of the file to log trades to.
-        """
-        self.filename = filename
+    def record(self, trades: List[TradeLog]) -> pd.DataFrame:
+        if not isinstance(trades, list):
+            raise ValueError("trades must be a list of TradeLog")
+        for t in trades:
+            if not isinstance(t, TradeLog):
+                raise ValueError("trades must contain TradeLog instances")
+        self._trades.extend(trades)
+        return self.to_frame()
 
-    def log_trade(self, symbol: str, entry: float, exit: float, pnl: float,
-                  timestamp: Optional[str] = None) -> None:
-        """
-        Record the details of a single trade to the log file.
+    def to_frame(self) -> pd.DataFrame:
+        if not self._trades:
+            return pd.DataFrame(columns=["symbol", "side", "size", "price", "pnl", "timestamp"])
+        rows = [
+            {
+                "symbol": t.symbol,
+                "side": t.side,
+                "size": t.size,
+                "price": t.price,
+                "pnl": t.pnl,
+                "timestamp": t.timestamp,
+            }
+            for t in self._trades
+        ]
+        return pd.DataFrame(rows)
 
-        Args:
-            symbol (str): The trading symbol (e.g., "EURUSD").
-            entry (float): Entry price.
-            exit (float): Exit price.
-            pnl (float): Profit or loss from the trade.
-            timestamp (str): Optional ISO timestamp, defaults to current time.
-
-        Returns:
-            None
-        """
-        if timestamp is None:
-            timestamp = datetime.utcnow().isoformat()
-        line = f"{timestamp},{symbol},{entry},{exit},{pnl}\n"
-        header = "timestamp,symbol,entry,exit,pnl\n"
-        try:
-            with open(self.filename, "a", encoding="utf-8") as f:
-                if f.tell() == 0:
-                    f.write(header)
-                f.write(line)
-        except FileNotFoundError:
-            with open(self.filename, "w", encoding="utf-8") as f:
-                f.write(header)
-                f.write(line)
+    def exposures(self) -> Dict[str, float]:
+        df = self.to_frame()
+        if df.empty:
+            return {}
+        signed = df["size"].where(df["side"] == "buy", -df["size"])
+        return dict(df.groupby("symbol")["size"].sum())
